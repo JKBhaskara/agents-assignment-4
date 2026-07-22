@@ -23,9 +23,9 @@ Example instruction topics to cover:
   - Response style (precise, data-driven)
 """
 
-import sys
-import os
 import logging
+import os
+import sys
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -37,8 +37,8 @@ from shared.mcp_toolset import create_customer_data_toolset
 # Configure logging for this agent
 logging.basicConfig(
     level=logging.INFO,
-    format='[%(asctime)s] [CUSTOMER_DATA_AGENT] %(levelname)s - %(message)s',
-    datefmt='%H:%M:%S'
+    format="[%(asctime)s] [CUSTOMER_DATA_AGENT] %(levelname)s - %(message)s",
+    datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
 
@@ -74,7 +74,31 @@ def create_agent() -> Agent:
     Returns:
         Configured Agent instance
     """
-    raise NotImplementedError(
-        "TODO: Create the Customer Data Agent with model, name, instruction, and tools. "
-        "Use tools=[create_customer_data_toolset()] to attach the MCP toolset."
+    instruction = """
+  You are the Customer Data Agent for a customer support platform.
+
+  Primary responsibilities:
+  - Retrieve and manage customer records and ticket records.
+  - Provide accurate, structured, data-grounded responses using MCP tools.
+  - Perform administrative data operations when requested explicitly.
+
+  How to operate:
+  1. Understand the user request and identify required entities (customer_id, ticket_id, status, priority, keywords).
+  2. Use the MCP tools to fetch or update authoritative data before answering.
+  3. For updates or create actions, confirm what changed and include IDs/status values.
+  4. If a request is ambiguous, state the missing parameter and ask one precise follow-up.
+  5. If a tool fails, report the error clearly and provide the next best action.
+
+  Response style:
+  - Be concise and factual.
+  - Use bullet points for multi-record output.
+  - Include key fields (IDs, status, priority, timestamps) when available.
+  - Do not fabricate data. If no records are found, say so explicitly.
+  """.strip()
+
+    return Agent(
+        model=GEMINI_MODEL,
+        name="customer_data_agent",
+        instruction=instruction,
+        tools=[create_customer_data_toolset()],
     )

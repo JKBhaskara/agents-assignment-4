@@ -22,32 +22,50 @@ Requirements for bonus points:
   - Full orchestrator assembled correctly (2 pts)
 """
 
-import sys
-import os
 import logging
+import os
+import sys
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # IMPORTANT: Apply A2A compatibility patch
-from shared import a2a_compat  # noqa: F401
-
-from google.adk.agents import Agent, SequentialAgent, ParallelAgent
-from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
-from google.adk.agents.readonly_context import ReadonlyContext
 from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
+from google.adk.agents import Agent, ParallelAgent, SequentialAgent
+from google.adk.agents.readonly_context import ReadonlyContext
+from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
+from shared import a2a_compat  # noqa: F401
 from shared.agents_config import (
     CUSTOMER_DATA_AGENT_URL,
-    SUPPORT_AGENT_URL,
     GEMINI_MODEL,
+    SUPPORT_AGENT_URL,
 )
 
 logger = logging.getLogger(__name__)
 
 
+def _store_customer_data_output(callback_context):
+    """Ensure summary state has a customer_data_output key."""
+    callback_context.state["customer_data_output"] = callback_context.state.get(
+        "customer_data_output",
+        "Customer data agent completed. Refer to prior conversation context for details.",
+    )
+    return None
+
+
+def _store_support_output(callback_context):
+    """Ensure summary state has a support_specialist_output key."""
+    callback_context.state["support_specialist_output"] = callback_context.state.get(
+        "support_specialist_output",
+        "Support specialist agent completed. Refer to prior conversation context for details.",
+    )
+    return None
+
+
 # =============================================================================
 # TODO BONUS: Summary Instruction Function
 # =============================================================================
+
 
 def create_summary_instruction(readonly_context: ReadonlyContext) -> str:
     """
@@ -63,12 +81,28 @@ def create_summary_instruction(readonly_context: ReadonlyContext) -> str:
       - support_output = readonly_context.state.get("support_specialist_output", "")
       - Instruction should tell the LLM to combine outputs naturally
     """
-    raise NotImplementedError("BONUS TODO: Implement create_summary_instruction")
+    data_output = readonly_context.state.get("customer_data_output", "")
+    support_output = readonly_context.state.get("support_specialist_output", "")
+
+    return f"""
+  You are the synthesis agent for parallel customer support workflows.
+
+  Combine the two specialist outputs into one coherent response:
+  - customer_data_output: {data_output}
+  - support_specialist_output: {support_output}
+
+  Output requirements:
+  1. Start with a short combined summary.
+  2. Present data findings and support guidance in clear sections.
+  3. Resolve contradictions by preferring concrete data evidence.
+  4. End with practical next steps for the customer.
+  """.strip()
 
 
 # =============================================================================
 # TODO BONUS: Create Parallel Agent
 # =============================================================================
+
 
 def create_agent():
     """
@@ -95,7 +129,34 @@ def create_agent():
     Returns:
         Configured SequentialAgent with parallel execution and synthesis
     """
-    raise NotImplementedError(
-        "BONUS TODO: Create the parallel router agent. "
-        "See the docstring above for the architecture."
+    remote_customer_data = RemoteA2aAgent(
+        name="customer_data",
+        description="Access customer and ticket data from MCP server",
+        agent_card=f"{CUSTOMER_DATA_AGENT_URL}{AGENT_CARD_WELL_KNOWN_PATH}",
+        after_agent_callback=_store_customer_data_output,
+    )
+
+    remote_support = RemoteA2aAgent(
+        name="support_specialist",
+        description="Provide customer support and troubleshooting solutions",
+        agent_card=f"{SUPPORT_AGENT_URL}{AGENT_CARD_WELL_KNOWN_PATH}",
+        after_agent_callback=_store_support_output,
+    )
+
+    parallel_worker_agent = ParallelAgent(
+        name="parallel_specialists",
+        sub_agents=[remote_customer_data, remote_support],
+    )
+
+    summary_agent = Agent(
+        model=GEMINI_MODEL,
+        name="parallel_summary_agent",
+        description="Synthesizes outputs from data and support specialists.",
+        instruction=create_summary_instruction,
+        include_contents="none",
+    )
+
+    return SequentialAgent(
+        name="parallel_customer_support_host",
+        sub_agents=[parallel_worker_agent, summary_agent],
     )

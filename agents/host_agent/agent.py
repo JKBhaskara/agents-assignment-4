@@ -23,9 +23,11 @@ Key concepts:
   - SequentialAgent runs sub-agents in order, passing context between them
 """
 
-import sys
-import os
 import logging
+import os
+import sys
+
+import httpx
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -34,11 +36,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # CRITICAL: Apply A2A compatibility patch BEFORE importing RemoteA2aAgent
 # This fixes an import issue between google-adk and a2a-sdk versions.
 # =============================================================================
-from shared import a2a_compat  # noqa: F401
-
+from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
 from google.adk.agents import SequentialAgent
 from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
-from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
+from google.genai import types
+from shared import a2a_compat  # noqa: F401
 from shared.agents_config import (
     CUSTOMER_DATA_AGENT_URL,
     SUPPORT_AGENT_URL,
@@ -47,10 +49,39 @@ from shared.agents_config import (
 # Configure logging for this agent
 logging.basicConfig(
     level=logging.INFO,
-    format='[%(asctime)s] [HOST_AGENT] %(levelname)s - %(message)s',
-    datefmt='%H:%M:%S'
+    format="[%(asctime)s] [HOST_AGENT] %(levelname)s - %(message)s",
+    datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+def _remote_availability_guard(agent_url: str, agent_name: str):
+    """Return a callback that skips remote call when the target A2A agent is down."""
+
+    def _check_remote(callback_context):
+        try:
+            response = httpx.get(
+                f"{agent_url}{AGENT_CARD_WELL_KNOWN_PATH}",
+                timeout=3.0,
+            )
+            if response.status_code == 200:
+                return None
+        except Exception:
+            pass
+
+        return types.Content(
+            parts=[
+                types.Part(
+                    text=(
+                        f"{agent_name} is unreachable at {agent_url}. "
+                        "Start all A2A agent servers first (for example: `python run_agents.py --mode start`), "
+                        "then retry your request."
+                    )
+                )
+            ]
+        )
+
+    return _check_remote
 
 
 def create_agent() -> SequentialAgent:
@@ -94,8 +125,29 @@ def create_agent() -> SequentialAgent:
     Returns:
         Configured SequentialAgent instance
     """
-    raise NotImplementedError(
-        "TODO: Create the Host Agent with two RemoteA2aAgent sub-agents "
-        "(customer_data and support_specialist) wrapped in a SequentialAgent. "
-        "See the docstring above for the exact structure."
+    remote_customer_data = RemoteA2aAgent(
+        name="customer_data",
+        description="Access customer and ticket data from MCP server",
+        agent_card=f"{CUSTOMER_DATA_AGENT_URL}{AGENT_CARD_WELL_KNOWN_PATH}",
+        timeout=45.0,
+        before_agent_callback=_remote_availability_guard(
+            CUSTOMER_DATA_AGENT_URL,
+            "Customer Data Agent",
+        ),
+    )
+
+    remote_support = RemoteA2aAgent(
+        name="support_specialist",
+        description="Provide customer support and troubleshooting solutions",
+        agent_card=f"{SUPPORT_AGENT_URL}{AGENT_CARD_WELL_KNOWN_PATH}",
+        timeout=45.0,
+        before_agent_callback=_remote_availability_guard(
+            SUPPORT_AGENT_URL,
+            "Support Agent",
+        ),
+    )
+
+    return SequentialAgent(
+        name="customer_support_host",
+        sub_agents=[remote_customer_data, remote_support],
     )

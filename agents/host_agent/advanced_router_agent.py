@@ -20,40 +20,48 @@ Requirements for bonus points:
   - Full orchestrator assembled correctly (2 pts)
 """
 
-import sys
-import os
 import logging
+import os
+import sys
 from typing import Optional
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # IMPORTANT: Apply A2A compatibility patch BEFORE importing RemoteA2aAgent
-from shared import a2a_compat  # noqa: F401
-
-from google.adk.agents import Agent, SequentialAgent, ParallelAgent
-from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
-from google.adk.agents.callback_context import CallbackContext
-from google.genai import types
 from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
+from google.adk.agents import Agent, SequentialAgent
+from google.adk.agents.callback_context import CallbackContext
+from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
+from google.genai import types
+from shared import a2a_compat  # noqa: F401
 from shared.agents_config import (
     CUSTOMER_DATA_AGENT_URL,
-    SUPPORT_AGENT_URL,
     GEMINI_MODEL,
+    SUPPORT_AGENT_URL,
 )
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='[%(asctime)s] [ROUTER_AGENT] %(levelname)s - %(message)s',
-    datefmt='%H:%M:%S'
+    format="[%(asctime)s] [ROUTER_AGENT] %(levelname)s - %(message)s",
+    datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+def _extract_query_text(content: Optional[types.Content]) -> str:
+    """Extract plain text query from ADK user content."""
+    if not content or not getattr(content, "parts", None):
+        return ""
+    text_parts = [getattr(part, "text", "") for part in content.parts]
+    return " ".join([part for part in text_parts if part]).strip()
 
 
 # =============================================================================
 # TODO BONUS: Routing Logic Functions
 # =============================================================================
+
 
 def analyze_query_intent(query: str) -> dict:
     """
@@ -78,14 +86,80 @@ def analyze_query_intent(query: str) -> dict:
             'execution_mode': 'sequential'
         }
     """
-    raise NotImplementedError("BONUS TODO: Implement analyze_query_intent")
+    normalized = (query or "").lower()
+
+    data_keywords = {
+        "customer",
+        "customers",
+        "ticket",
+        "tickets",
+        "id",
+        "list",
+        "search",
+        "status",
+        "priority",
+        "account",
+        "history",
+        "stats",
+        "statistics",
+    }
+    support_keywords = {
+        "help",
+        "issue",
+        "problem",
+        "reset",
+        "fix",
+        "cannot",
+        "can't",
+        "error",
+        "login",
+        "password",
+        "billing",
+        "payment",
+        "failed",
+        "slow",
+        "timeout",
+        "troubleshoot",
+        "support",
+    }
+    urgency_keywords = {"urgent", "immediately", "asap", "critical", "now"}
+
+    needs_data = any(token in normalized for token in data_keywords)
+    needs_support = any(token in normalized for token in support_keywords)
+
+    if not needs_data and not needs_support:
+        needs_data = True
+        needs_support = True
+
+    urgency = (
+        "high" if any(token in normalized for token in urgency_keywords) else "medium"
+    )
+    if len(normalized.strip()) < 20 and urgency != "high":
+        urgency = "low"
+
+    if needs_data and needs_support:
+        execution_mode = "sequential"
+    elif needs_data:
+        execution_mode = "data_only"
+    else:
+        execution_mode = "support_only"
+
+    return {
+        "needs_data": needs_data,
+        "needs_support": needs_support,
+        "urgency": urgency,
+        "execution_mode": execution_mode,
+    }
 
 
 # =============================================================================
 # TODO BONUS: Callback Functions for Dynamic Routing
 # =============================================================================
 
-def should_run_customer_data_agent(callback_context: CallbackContext) -> Optional[types.Content]:
+
+def should_run_customer_data_agent(
+    callback_context: CallbackContext,
+) -> Optional[types.Content]:
     """
     Callback to determine if Customer Data Agent should run.
 
@@ -98,21 +172,50 @@ def should_run_customer_data_agent(callback_context: CallbackContext) -> Optiona
       - Return None to run the agent
       - Return types.Content(parts=[types.Part(text="...")]) to skip
     """
-    raise NotImplementedError("BONUS TODO: Implement should_run_customer_data_agent callback")
+    routing_decision = callback_context.state.get("routing_decision", {})
+    if not routing_decision:
+        routing_decision = analyze_query_intent(
+            _extract_query_text(callback_context.user_content)
+        )
+        callback_context.state["routing_decision"] = routing_decision
+
+    if routing_decision.get("needs_data", True):
+        return None
+
+    return types.Content(
+        parts=[
+            types.Part(text="Skipping customer data step based on routing analysis.")
+        ]
+    )
 
 
-def should_run_support_agent(callback_context: CallbackContext) -> Optional[types.Content]:
+def should_run_support_agent(
+    callback_context: CallbackContext,
+) -> Optional[types.Content]:
     """
     Callback to determine if Support Agent should run.
 
     TODO: Similar to should_run_customer_data_agent but checks needs_support.
     """
-    raise NotImplementedError("BONUS TODO: Implement should_run_support_agent callback")
+    routing_decision = callback_context.state.get("routing_decision", {})
+    if not routing_decision:
+        routing_decision = analyze_query_intent(
+            _extract_query_text(callback_context.user_content)
+        )
+        callback_context.state["routing_decision"] = routing_decision
+
+    if routing_decision.get("needs_support", True):
+        return None
+
+    return types.Content(
+        parts=[types.Part(text="Skipping support step based on routing analysis.")]
+    )
 
 
 # =============================================================================
 # TODO BONUS: Router Agent with Dynamic Instruction
 # =============================================================================
+
 
 def create_router_instruction(readonly_context) -> str:
     """
@@ -124,12 +227,21 @@ def create_router_instruction(readonly_context) -> str:
       3. Store routing_decision in readonly_context.state
       4. Return a dynamic instruction string based on the analysis
     """
-    raise NotImplementedError("BONUS TODO: Implement create_router_instruction")
+    query = _extract_query_text(getattr(readonly_context, "user_content", None))
+    routing_decision = analyze_query_intent(query)
+
+    return (
+        "You are a routing coordinator for customer support. "
+        f"Current routing decision: {routing_decision}. "
+        "Briefly acknowledge the plan and prepare context for downstream agents. "
+        "Do not claim to execute tools directly; focus on decomposition and clarity."
+    )
 
 
 # =============================================================================
 # TODO BONUS: Create Advanced Agent
 # =============================================================================
+
 
 def create_agent():
     """
@@ -145,7 +257,33 @@ def create_agent():
     Returns:
         Configured SequentialAgent with router and conditional sub-agents
     """
-    raise NotImplementedError(
-        "BONUS TODO: Create the advanced router agent. "
-        "See the docstring above for the architecture."
+    router_agent = Agent(
+        model=GEMINI_MODEL,
+        name="routing_coordinator",
+        description="Analyzes user intent and prepares dynamic routing context.",
+        instruction=create_router_instruction,
+    )
+
+    remote_customer_data = RemoteA2aAgent(
+        name="customer_data",
+        description="Access customer and ticket data from MCP server",
+        agent_card=f"{CUSTOMER_DATA_AGENT_URL}{AGENT_CARD_WELL_KNOWN_PATH}",
+        before_agent_callback=should_run_customer_data_agent,
+    )
+
+    remote_support = RemoteA2aAgent(
+        name="support_specialist",
+        description="Provide customer support and troubleshooting solutions",
+        agent_card=f"{SUPPORT_AGENT_URL}{AGENT_CARD_WELL_KNOWN_PATH}",
+        before_agent_callback=should_run_support_agent,
+    )
+
+    sequential_execution_agent = SequentialAgent(
+        name="conditional_executor",
+        sub_agents=[remote_customer_data, remote_support],
+    )
+
+    return SequentialAgent(
+        name="advanced_customer_support_host",
+        sub_agents=[router_agent, sequential_execution_agent],
     )

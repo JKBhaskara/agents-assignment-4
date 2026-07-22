@@ -11,27 +11,25 @@ import os
 import sys
 import threading
 import time
+import uuid
 from typing import Any
 
 # Add agents directory to Python path
-agents_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agents')
+agents_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agents")
 sys.path.insert(0, agents_dir)
 
 # IMPORTANT: Apply A2A compatibility patch BEFORE any A2A imports
-from shared import a2a_compat  # noqa: F401
-
 import httpx
 import nest_asyncio
 import uvicorn
-from dotenv import load_dotenv
-
-from a2a.client import ClientConfig, ClientFactory, create_text_message_object
+from a2a.client import ClientConfig, ClientFactory
 from a2a.server.apps import A2AStarletteApplication
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.tasks import InMemoryTaskStore
-from a2a.types import TransportProtocol
+from a2a.types import Message, Part, Role, TransportProtocol
 from a2a.utils.constants import AGENT_CARD_WELL_KNOWN_PATH
-
+from create_agents import create_all_agents
+from dotenv import load_dotenv
 from google.adk.a2a.executor.a2a_agent_executor import (
     A2aAgentExecutor,
     A2aAgentExecutorConfig,
@@ -40,27 +38,27 @@ from google.adk.artifacts import InMemoryArtifactService
 from google.adk.memory.in_memory_memory_service import InMemoryMemoryService
 from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
-
-from create_agents import create_all_agents
+from shared import a2a_compat  # noqa: F401
 
 # Load environment variables from project root
 project_root = os.path.dirname(os.path.abspath(__file__))
-dotenv_path = os.path.join(project_root, '.env')
+dotenv_path = os.path.join(project_root, ".env")
 load_dotenv(dotenv_path=dotenv_path)
 
 # Setup logging
 logging.basicConfig(
     level=logging.INFO,
-    format='[%(asctime)s] [%(name)s] %(levelname)s - %(message)s',
-    datefmt='%H:%M:%S'
+    format="[%(asctime)s] [%(name)s] %(levelname)s - %(message)s",
+    datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
 
+
 def print_agent_card(agent_card, port: int):
     """Print agent card in a nice formatted way."""
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print(f"AGENT: {agent_card.name}")
-    print("="*80)
+    print("=" * 80)
     print(f"URL: http://127.0.0.1:{port}")
     print(f"Description: {agent_card.description}")
     print(f"Protocol: {agent_card.protocol_version}")
@@ -69,10 +67,11 @@ def print_agent_card(agent_card, port: int):
     for skill in agent_card.skills:
         print(f"  - {skill.name}: {skill.description}")
         print(f"    Examples:")
-        examples = skill.examples if hasattr(skill, 'examples') else []
+        examples = skill.examples if hasattr(skill, "examples") else []
         for example in examples[:3]:  # Show first 3 examples
             print(f"      * {example}")
-    print("="*80 + "\n")
+    print("=" * 80 + "\n")
+
 
 # Apply nest_asyncio for Jupyter/Colab compatibility
 nest_asyncio.apply()
@@ -107,11 +106,11 @@ def create_agent_a2a_server(agent, agent_card):
             logger.info(f"[{agent_name}] Received request")
 
             # Log request details
-            if hasattr(request, 'message') and request.message:
+            if hasattr(request, "message") and request.message:
                 msg_text = ""
-                if hasattr(request.message, 'parts') and request.message.parts:
+                if hasattr(request.message, "parts") and request.message.parts:
                     for part in request.message.parts:
-                        if hasattr(part, 'root') and hasattr(part.root, 'text'):
+                        if hasattr(part, "root") and hasattr(part.root, "text"):
                             msg_text += part.root.text
                 if msg_text:
                     logger.info(f"[{agent_name}] Message: {msg_text[:100]}...")
@@ -127,9 +126,7 @@ def create_agent_a2a_server(agent, agent_card):
         task_store=InMemoryTaskStore(),
     )
 
-    return A2AStarletteApplication(
-        agent_card=agent_card, http_handler=request_handler
-    )
+    return A2AStarletteApplication(agent_card=agent_card, http_handler=request_handler)
 
 
 async def run_agent_server(agent, agent_card, port: int) -> None:
@@ -138,10 +135,10 @@ async def run_agent_server(agent, agent_card, port: int) -> None:
 
     config = uvicorn.Config(
         app.build(),
-        host='127.0.0.1',
+        host="127.0.0.1",
         port=port,
-        log_level='warning',
-        loop='none',  # Use the current event loop
+        log_level="warning",
+        loop="none",  # Use the current event loop
     )
 
     server = uvicorn.Server(config)
@@ -156,30 +153,28 @@ async def start_all_servers() -> None:
     # Print agent cards
     print("\n" + " STARTING MULTI-AGENT SYSTEM ".center(80, "="))
     for agent_name, config in agents_config.items():
-        print_agent_card(config['card'], config['port'])
+        print_agent_card(config["card"], config["port"])
 
     # Create tasks for all servers
     tasks = []
     for agent_name, config in agents_config.items():
         task = asyncio.create_task(
-            run_agent_server(
-                config['agent'],
-                config['card'],
-                config['port']
-            )
+            run_agent_server(config["agent"], config["card"], config["port"])
         )
         tasks.append(task)
 
     # Give servers time to start
     await asyncio.sleep(3)
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print(" ALL AGENT SERVERS STARTED AND READY ".center(80))
-    print("="*80)
-    print(f"Customer Data Agent:  http://127.0.0.1:{agents_config['customer_data']['port']}")
+    print("=" * 80)
+    print(
+        f"Customer Data Agent:  http://127.0.0.1:{agents_config['customer_data']['port']}"
+    )
     print(f"Support Agent:        http://127.0.0.1:{agents_config['support']['port']}")
     print(f"Host Agent:           http://127.0.0.1:{agents_config['host']['port']}")
-    print("="*80 + "\n")
+    print("=" * 80 + "\n")
 
     # Keep servers running
     try:
@@ -202,6 +197,26 @@ class A2AClient:
         self._agent_info_cache: dict[str, dict[str, Any] | None] = {}
         self.default_timeout = default_timeout
 
+    @staticmethod
+    def _build_text_request(content: str) -> Message:
+        """Build a text message for A2A client.send_message."""
+        user_role = getattr(Role, "ROLE_USER", None) or getattr(Role, "user", None)
+        return Message(
+            message_id=f"msg-{uuid.uuid4().hex}",
+            role=user_role,
+            parts=[Part(text=content)],
+        )
+
+    @staticmethod
+    def _extract_text_from_parts(parts) -> str:
+        """Extract readable text from A2A Part entries."""
+        text_chunks = []
+        for part in parts or []:
+            text_value = getattr(part, "text", "")
+            if text_value:
+                text_chunks.append(text_value)
+        return "\n".join(text_chunks).strip()
+
     async def send_message(self, agent_url: str, message: str) -> str:
         """
         Send a message to an A2A agent.
@@ -223,17 +238,23 @@ class A2AClient:
 
         async with httpx.AsyncClient(timeout=timeout_config) as httpx_client:
             # Check cache for agent card
-            if agent_url in self._agent_info_cache and self._agent_info_cache[agent_url] is not None:
+            if (
+                agent_url in self._agent_info_cache
+                and self._agent_info_cache[agent_url] is not None
+            ):
                 agent_card_data = self._agent_info_cache[agent_url]
             else:
                 # Fetch agent card
                 agent_card_response = await httpx_client.get(
-                    f'{agent_url}{AGENT_CARD_WELL_KNOWN_PATH}'
+                    f"{agent_url}{AGENT_CARD_WELL_KNOWN_PATH}"
                 )
-                agent_card_data = self._agent_info_cache[agent_url] = agent_card_response.json()
+                agent_card_data = self._agent_info_cache[agent_url] = (
+                    agent_card_response.json()
+                )
 
             # Create AgentCard from data
             from a2a.types import AgentCard
+
             agent_card = AgentCard(**agent_card_data)
 
             # Create A2A client
@@ -250,7 +271,7 @@ class A2AClient:
             client = factory.create(agent_card)
 
             # Create and send message
-            message_obj = create_text_message_object(content=message)
+            message_obj = self._build_text_request(content=message)
 
             # Collect responses
             responses = []
@@ -258,54 +279,71 @@ class A2AClient:
                 responses.append(response)
 
             # Extract response text
-            if responses and isinstance(responses[0], tuple) and len(responses[0]) > 0:
-                task = responses[0][0]
-                try:
-                    return task.artifacts[0].parts[0].root.text
-                except (AttributeError, IndexError):
+            # Newer A2A SDK returns StreamResponse protobuf messages.
+            for response in responses:
+                if hasattr(response, "message") and response.message:
+                    text = self._extract_text_from_parts(
+                        getattr(response.message, "parts", [])
+                    )
+                    if text:
+                        return text
+
+                if hasattr(response, "task") and response.task:
+                    for artifact in getattr(response.task, "artifacts", []):
+                        text = self._extract_text_from_parts(
+                            getattr(artifact, "parts", [])
+                        )
+                        if text:
+                            return text
+
+                # Backward compatibility with older tuple-based SDK behavior.
+                if isinstance(response, tuple) and len(response) > 0:
+                    task = response[0]
+                    for artifact in getattr(task, "artifacts", []):
+                        for part in getattr(artifact, "parts", []):
+                            if hasattr(part, "root") and hasattr(part.root, "text"):
+                                return part.root.text
                     return str(task)
 
-            return 'No response received'
+            return "No response received"
 
 
 async def test_agents():
     """Test all agents."""
     client = A2AClient()
 
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TESTING CUSTOMER SUPPORT A2A AGENTS")
-    print("="*80 + "\n")
+    print("=" * 80 + "\n")
 
     # Test Customer Data Agent
     print("1. Testing Customer Data Agent")
-    print("-"*80)
+    print("-" * 80)
     response = await client.send_message(
-        "http://localhost:10020",
-        "Show me all open tickets with high priority"
+        "http://localhost:10020", "Show me all open tickets with high priority"
     )
     print(f"Response: {response}\n")
 
     # Test Support Agent
     print("2. Testing Support Agent")
-    print("-"*80)
+    print("-" * 80)
     response = await client.send_message(
-        "http://localhost:10021",
-        "I can't login to my account, what should I do?"
+        "http://localhost:10021", "I can't login to my account, what should I do?"
     )
     print(f"Response: {response}\n")
 
     # Test Host Agent (Orchestrator)
     print("3. Testing Host Agent (Orchestrator)")
-    print("-"*80)
+    print("-" * 80)
     response = await client.send_message(
         "http://localhost:10022",
-        "I'm having login issues, can you check my account and help me resolve this?"
+        "I'm having login issues, can you check my account and help me resolve this?",
     )
     print(f"Response: {response}\n")
 
-    print("="*80)
+    print("=" * 80)
     print("All tests completed!")
-    print("="*80 + "\n")
+    print("=" * 80 + "\n")
 
 
 def main():
@@ -316,15 +354,15 @@ def main():
         description="Run Customer Support A2A Multi-Agent System"
     )
     parser.add_argument(
-        '--mode',
-        choices=['start', 'test'],
-        default='start',
-        help='Mode: start servers or run tests'
+        "--mode",
+        choices=["start", "test"],
+        default="start",
+        help="Mode: start servers or run tests",
     )
 
     args = parser.parse_args()
 
-    if args.mode == 'start':
+    if args.mode == "start":
         # Start servers in background thread
         logger.info("Starting agent servers...")
         server_thread = threading.Thread(target=run_servers_in_background, daemon=True)
@@ -333,9 +371,9 @@ def main():
         # Wait for servers to be ready
         time.sleep(5)
 
-        logger.info("\n" + "="*80)
+        logger.info("\n" + "=" * 80)
         logger.info("Servers are running! Press Ctrl+C to stop.")
-        logger.info("="*80 + "\n")
+        logger.info("=" * 80 + "\n")
 
         try:
             while True:
@@ -343,7 +381,7 @@ def main():
         except KeyboardInterrupt:
             logger.info("\nShutting down...")
 
-    elif args.mode == 'test':
+    elif args.mode == "test":
         # Start servers first
         logger.info("Starting agent servers for testing...")
         server_thread = threading.Thread(target=run_servers_in_background, daemon=True)

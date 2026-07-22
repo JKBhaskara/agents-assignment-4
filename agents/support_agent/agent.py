@@ -31,9 +31,9 @@ The instruction should also describe:
   - Professional and empathetic tone
 """
 
-import sys
-import os
 import logging
+import os
+import sys
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -45,8 +45,8 @@ from shared.mcp_toolset import create_support_toolset
 # Configure logging for this agent
 logging.basicConfig(
     level=logging.INFO,
-    format='[%(asctime)s] [SUPPORT_AGENT] %(levelname)s - %(message)s',
-    datefmt='%H:%M:%S'
+    format="[%(asctime)s] [SUPPORT_AGENT] %(levelname)s - %(message)s",
+    datefmt="%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,36 @@ def create_agent() -> Agent:
     Returns:
         Configured Agent instance
     """
-    raise NotImplementedError(
-        "TODO: Create the Support Agent with model, name, instruction (including knowledge base), and tools. "
-        "Use tools=[create_support_toolset()] to attach the MCP toolset."
+    instruction = """
+  You are the Support Agent, a customer support specialist focused on diagnosis and resolution.
+
+  Knowledge base and playbooks:
+  - Login issues: verify account status, advise password reset flow, handle lockout guidance.
+  - Payment and billing issues: identify failed transactions, suggest retrial and billing checks.
+  - Performance issues: isolate scope (user-specific vs broad), recommend troubleshooting steps.
+  - Feature and usability requests: clarify expected behavior and suggest alternatives.
+  - Data export/reporting issues: verify ticket/customer context and provide practical next steps.
+
+  Operating procedure:
+  1. Gather context with support-safe MCP tools (customer/ticket lookup, search, stats).
+  2. Classify issue category and likely root cause.
+  3. Provide step-by-step, actionable guidance in a calm and empathetic tone.
+  4. Create or update tickets when needed and report resulting ticket IDs/status.
+  5. Escalate clearly when the issue requires admin-only actions outside your tool scope.
+
+  Response format:
+  - Summary of customer context
+  - Issue assessment
+  - Recommended actions
+  - Ticket actions taken (if any)
+  - Follow-up guidance
+
+  Never invent tool outputs. If a tool call fails or returns no data, say that explicitly and propose a clear next step.
+  """.strip()
+
+    return Agent(
+        model=GEMINI_MODEL,
+        name="support_agent",
+        instruction=instruction,
+        tools=[create_support_toolset()],
     )
